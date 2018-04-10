@@ -1,0 +1,72 @@
+#! /bin/bash
+
+proccount=0
+semcount=`ipcs -s|awk '{if ( $2 ~ /^[0-9][0-9]*$/ ) {count = count + $5 }} END {print count}'`
+
+while read semid
+do
+	ipcs  -s -p -i $semid | sed -e "1,8d" -e "s/ *$//"  -e "s/.* /$semid /"
+done < <( ipcs -s|awk '{if ( $2 ~ /^[0-9][0-9]*$/ ) {print $2}}' ) | sort -g -k2 > /tmp/sempids.$$ 
+
+# sempids contains lines in the form:
+#	semid1	pid1
+#	semid2	pid1
+#	semid3	pid1
+#	semid4	pid2
+#	semid5	pid3
+# note that multiple semaphores may be attached to a single PID
+
+
+
+printf "=========== Active Processes Using Semaphores =============\n"
+printf "SEMS    UID        PID  PPID  C STIME TTY          TIME CMD\n"
+
+prevpid="-1"
+declare -a SEMSperPID
+
+while read line
+do
+	fields=($line)
+	sem=${fields[0]}
+	pid=${fields[1]}
+
+	if [ -z "$pid" ] ; then
+		continue
+	fi
+
+	if [ "$pid" = "0" ] ; then
+		continue
+	fi
+
+	if [ "$prevpid" != "$pid" ] ; then
+		# The lines are sorted by PID, and we've got semaphore attached to a new PID...
+		# show the info from the previous PID
+		procinfo=`ps -f --no-headers --pid $prevpid 2> /dev/null`
+		if [ $? = 0 ] ; then
+			# the previous 'ps' will likely fail, if the PID was associated with a
+			# process that no longer exists...only if the PS succeeded do we
+			# print the count of semaphores and the process info
+			printf "${SEMSperPID[${prevpid}]}\t${procinfo}\n"
+		fi
+
+		# increment the count of unique PIDs
+		proccount=$((proccount + 1))	
+
+		# initialize counter of number of semaphores for the new PID
+		SEMSperPID[$pid]=1
+		prevpid=$pid
+	else
+		# repeated PID
+		SEMSperPID[${pid}]=$((SEMSperPID[${pid}] + 1))
+	fi
+
+done < <( cat /tmp/sempids.$$)
+
+printf "\n$semcount semaphores, attached to $proccount processes\n"
+
+
+# for key in "${!SEMSperPID[@]}"
+# do
+	# printf "$key\t${SEMSperPID[${key}]}\n"
+# done
+rm -f /tmp/sempids.$$
